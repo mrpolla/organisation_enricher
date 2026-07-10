@@ -1,0 +1,16 @@
+# --- Python ---
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+.env
+
+# --- Data ---
+/data/output/
+/data/input/
+
+# --- VS Code ---
+.vscode/
+
+# --- OS ---
+.DS_Store
