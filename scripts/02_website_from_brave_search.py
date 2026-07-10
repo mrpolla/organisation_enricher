@@ -34,8 +34,7 @@ import pandas as pd
 import requests
 from dotenv import load_dotenv
 
-from _utils import load as load_csv
-from _utils import save
+from _utils import DIRECTORY_DOMAINS, load as load_csv, save, slugify
 
 BRAVE_API_URL = "https://api.search.brave.com/res/v1/web/search"
 RESULTS_COUNT = 10
@@ -49,17 +48,6 @@ STOPWORDS = {
     "gmbh", "ag", "ev", "mbh", "inc", "ltd", "llc",
 }
 
-# Third-party directories and profile sites — never the org's own website
-DIRECTORY_DOMAINS = {
-    "wikipedia.org",
-    "linkedin.com", "xing.com",
-    "facebook.com", "instagram.com", "twitter.com", "x.com",
-    "youtube.com", "vimeo.com",
-    "northdata.com", "dnb.com", "crunchbase.com",
-    "bloomberg.com", "glassdoor.com", "kununu.com", "indeed.com",
-    "usgbc.org", "worldgbc.org",
-}
-
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -69,12 +57,6 @@ def get_api_key() -> str:
     if not key:
         raise RuntimeError("BRAVE_API_KEY not set in .env")
     return key
-
-
-def slugify(name: str) -> str:
-    slug = re.sub(r"[^\w\s-]", "", name.lower())
-    slug = re.sub(r"[\s_]+", "-", slug).strip("-")
-    return slug[:80]
 
 
 def extract_keywords(org_name: str) -> set[str]:

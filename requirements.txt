@@ -2,4 +2,4 @@ pandas
 nameparser
 requests
 python-dotenv
-
+beautifulsoup4

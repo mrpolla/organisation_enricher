@@ -5,11 +5,24 @@ every script reads and writes contacts_enriched.csv consistently.
 """
 
 import pathlib
+import re
 
 import pandas as pd
 
 RAW_INPUT = pathlib.Path("data/input/contacts_raw.csv")
 ENRICHED = pathlib.Path("data/output/contacts_enriched.csv")
+
+# Third-party directories and profile sites — never an org's own website.
+# Used by both the Brave search scorer and the email scraper.
+DIRECTORY_DOMAINS = {
+    "wikipedia.org",
+    "linkedin.com", "xing.com",
+    "facebook.com", "instagram.com", "twitter.com", "x.com",
+    "youtube.com", "vimeo.com",
+    "northdata.com", "dnb.com", "crunchbase.com",
+    "bloomberg.com", "glassdoor.com", "kununu.com", "indeed.com",
+    "usgbc.org", "worldgbc.org",
+}
 
 # Final output column order — all scripts write in this order.
 # Columns not yet produced by earlier steps are simply absent until added.
@@ -53,3 +66,10 @@ def save(df: pd.DataFrame) -> None:
     ENRICHED.parent.mkdir(parents=True, exist_ok=True)
     df[_ordered(df)].to_csv(ENRICHED, index=False)
     print(f"Saved → {ENRICHED}")
+
+
+def slugify(text: str) -> str:
+    """Convert a string to a safe filename slug (max 80 chars)."""
+    slug = re.sub(r"[^\w\s-]", "", text.lower())
+    slug = re.sub(r"[\s_]+", "-", slug).strip("-")
+    return slug[:80]
