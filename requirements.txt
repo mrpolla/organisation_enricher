@@ -1,2 +1,5 @@
 pandas
 nameparser
+requests
+python-dotenv
+
