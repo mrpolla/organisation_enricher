@@ -95,7 +95,7 @@ def map_frame(
                     )
                 )
 
-        # Preserve mixed fields exactly. Parsing happens in 04_clean_contacts.py.
+        # Preserve mixed fields exactly. Parsing happens in 04_review_contacts.py.
         if path.name == "Circular City Guide 2023_Ideas_organisations_initiatives - List.csv":
             links = row.get(
                 "Hier kannst du deine Links teilen: Website; Social Media; Google Tools (Maps); usw.",
