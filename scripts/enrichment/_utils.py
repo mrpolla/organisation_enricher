@@ -9,7 +9,7 @@ import re
 
 import pandas as pd
 
-RAW_INPUT = pathlib.Path("data/input/contacts_raw.csv")
+RAW_INPUT = pathlib.Path("data/input/contacts_clean.csv")
 ENRICHED = pathlib.Path("data/output/contacts_enriched.csv")
 
 # Third-party directories and profile sites — never an org's own website.

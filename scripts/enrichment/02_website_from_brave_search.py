@@ -28,6 +28,7 @@ import json
 import os
 import pathlib
 import re
+import time
 from typing import Any
 
 import pandas as pd
@@ -38,6 +39,7 @@ from _utils import DIRECTORY_DOMAINS, load as load_csv, save, slugify
 
 BRAVE_API_URL = "https://api.search.brave.com/res/v1/web/search"
 RESULTS_COUNT = 10
+REQUEST_DELAY = 1.0   # seconds between live API calls (free tier: 1 req/s)
 CACHE_DIR = pathlib.Path("data/cache/brave")
 CANDIDATES_FILE = pathlib.Path("data/output/brave_candidates.csv")
 
@@ -102,26 +104,33 @@ def write_cache(slug: str, data: dict[str, Any]) -> None:
 
 # ── API ───────────────────────────────────────────────────────────────────────
 
-def brave_search(query: str, api_key: str) -> dict[str, Any]:
-    resp = requests.get(
-        BRAVE_API_URL,
-        headers={
-            "Accept": "application/json",
-            "X-Subscription-Token": api_key,
-        },
-        params={"q": query, "count": RESULTS_COUNT},
-        timeout=15,
-    )
-    resp.raise_for_status()
-    content_type = resp.headers.get("Content-Type", "")
-    if "application/json" not in content_type:
-        raise RuntimeError(
-            f"Brave API returned {content_type!r} instead of JSON "
-            f"(status {resp.status_code}). "
-            "The API key may be invalid, expired, or missing Web Search access. "
-            "Check your key at https://api.search.brave.com/app/keys"
+def brave_search(query: str, api_key: str, max_retries: int = 4) -> dict[str, Any]:
+    for attempt in range(max_retries):
+        resp = requests.get(
+            BRAVE_API_URL,
+            headers={
+                "Accept": "application/json",
+                "X-Subscription-Token": api_key,
+            },
+            params={"q": query, "count": RESULTS_COUNT},
+            timeout=15,
         )
-    return resp.json()
+        if resp.status_code == 429:
+            wait = int(resp.headers.get("Retry-After", 2 ** (attempt + 1)))
+            print(f"(rate limited, waiting {wait}s) ", end="", flush=True)
+            time.sleep(wait)
+            continue
+        resp.raise_for_status()
+        content_type = resp.headers.get("Content-Type", "")
+        if "application/json" not in content_type:
+            raise RuntimeError(
+                f"Brave API returned {content_type!r} instead of JSON "
+                f"(status {resp.status_code}). "
+                "The API key may be invalid, expired, or missing Web Search access. "
+                "Check your key at https://api.search.brave.com/app/keys"
+            )
+        return resp.json()
+    raise RuntimeError(f"Brave API rate limit exceeded after {max_retries} retries for {query!r}")
 
 
 def get_results(data: dict[str, Any]) -> list[dict[str, Any]]:
@@ -157,9 +166,9 @@ def run(df: pd.DataFrame, api_key: str) -> tuple[pd.DataFrame, pd.DataFrame]:
     print(f"  Searching {len(orgs)} unique organisation(s)...")
     all_candidates: list[dict] = []
 
-    for org in orgs:
+    for i, org in enumerate(orgs, start=1):
         slug = slugify(str(org))
-        print(f"    {org!r} ... ", end="", flush=True)
+        print(f"  [{i}/{len(orgs)}] {org!r} ... ", end="", flush=True)
 
         data = load_cache(slug)
         if data is not None:
@@ -167,6 +176,7 @@ def run(df: pd.DataFrame, api_key: str) -> tuple[pd.DataFrame, pd.DataFrame]:
         else:
             data = brave_search(str(org), api_key)
             write_cache(slug, data)
+            time.sleep(REQUEST_DELAY)
 
         results = get_results(data)
         keywords = extract_keywords(str(org))
@@ -192,6 +202,8 @@ def run(df: pd.DataFrame, api_key: str) -> tuple[pd.DataFrame, pd.DataFrame]:
             org_mask = mask & (df["Organisation_Name"] == org)
             df.loc[org_mask, "Website"] = best_url
             df.loc[org_mask, "Website_Source"] = "Brave search"
+
+        save(df)  # persist progress so a restart skips already-processed orgs
 
     return df, pd.DataFrame(all_candidates)
 
