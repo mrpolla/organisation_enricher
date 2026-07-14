@@ -7,30 +7,44 @@ For every non-empty Website, tries URL variants in order:
   3. http://domain
   4. http://www.domain
 
-Stops on the first variant that returns any HTTP response.
+Stops on the first variant that returns HTTP 200. If none does, records the
+first HTTP error response (or the last connection error).
 Follows redirects; Website_Normalized holds the final URL.
 
-Each unique Website is checked once per run (deduplication).
-Safe to rerun — results are always refreshed.
+Each unique Website is checked at most once per run (deduplication).
+Progress is saved after every website, so an interrupted run can be resumed.
+By default, websites that already have a Website_Response_Code are skipped
+on the next run (resume). Pass --recheck-all to force a full refresh of
+every website regardless of existing results.
 
 Populates:
   Website_Normalized    — final URL after redirects
   Website_Response_Code — HTTP status code, or: TIMEOUT / SSL_ERROR /
-                          CONNECTION_ERROR / DNS_ERROR / INVALID_URL
+                          CONNECTION_ERROR / DNS_ERROR / INVALID_URL /
+                          TOO_MANY_REDIRECTS / REQUEST_ERROR
   Website_Response_Text — short readable description
 
 Usage:
     python scripts/0_check_websites.py
+    python scripts/0_check_websites.py --recheck-all
 
 Input:  data/output/contacts_enriched.csv  (falls back to data/input/contacts_raw.csv)
 Output: data/output/contacts_enriched.csv
 """
 
+import argparse
 from urllib.parse import urlparse
 
 import pandas as pd
 import requests
-from requests.exceptions import ConnectionError, InvalidURL, SSLError, Timeout
+from requests.exceptions import (
+    ConnectionError,
+    InvalidURL,
+    RequestException,
+    SSLError,
+    Timeout,
+    TooManyRedirects,
+)
 
 from _utils import load, save
 
@@ -85,13 +99,18 @@ def check_website(website: str) -> tuple[str, str, str]:
         return website, "INVALID_URL", "Invalid URL"
 
     last: tuple[str, str, str] = (website, "INVALID_URL", "Invalid URL")
+    first_http_error: tuple[str, str, str] | None = None
 
     for url in variants:
         try:
             resp = requests.get(
                 url, timeout=REQUEST_TIMEOUT, allow_redirects=True, headers=HEADERS
             )
-            return resp.url, str(resp.status_code), _status_text(resp.status_code)
+            result = (resp.url, str(resp.status_code), _status_text(resp.status_code))
+            if resp.status_code == 200:
+                return result
+            if first_http_error is None:
+                first_http_error = result
         except Timeout:
             last = (url, "TIMEOUT", "Timeout")
         except SSLError:
@@ -102,10 +121,14 @@ def check_website(website: str) -> tuple[str, str, str]:
                 last = (url, "DNS_ERROR", "DNS error")
             else:
                 last = (url, "CONNECTION_ERROR", "Connection failed")
+        except TooManyRedirects:
+            last = (url, "TOO_MANY_REDIRECTS", "Too many redirects")
         except (InvalidURL, ValueError):
             last = (url, "INVALID_URL", "Invalid URL")
+        except RequestException:
+            last = (url, "REQUEST_ERROR", "Request failed")
 
-    return last
+    return first_http_error or last
 
 
 def ensure_columns(df: pd.DataFrame) -> pd.DataFrame:
@@ -115,35 +138,59 @@ def ensure_columns(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def run(df: pd.DataFrame) -> pd.DataFrame:
+def run(df: pd.DataFrame, *, recheck_all: bool = False) -> pd.DataFrame:
     df = ensure_columns(df)
 
-    websites = df.loc[df["Website"].notna(), "Website"].unique().tolist()
+    all_websites = df.loc[df["Website"].notna(), "Website"].unique().tolist()
+    if not all_websites:
+        print("  No websites to check.")
+        return df
+
+    if recheck_all:
+        websites = all_websites
+    else:
+        checked = set(
+            df.loc[df["Website_Response_Code"].notna(), "Website"].unique().tolist()
+        )
+        websites = [w for w in all_websites if w not in checked]
+        skipped = len(all_websites) - len(websites)
+        if skipped:
+            print(f"  Skipping {skipped} already-checked website(s) (resume).")
+
     if not websites:
         print("  No websites to check.")
         return df
 
     print(f"  Checking {len(websites)} unique website(s)...")
-    cache: dict[str, tuple[str, str, str]] = {}
 
     for website in websites:
         print(f"    {website} ... ", end="", flush=True)
-        result = check_website(str(website))
-        cache[website] = result
-        print(result[1])
+        norm_url, code, text = check_website(str(website))
+        print(code)
 
-    for website, (norm_url, code, text) in cache.items():
         mask = df["Website"] == website
         df.loc[mask, "Website_Normalized"] = norm_url
         df.loc[mask, "Website_Response_Code"] = code
         df.loc[mask, "Website_Response_Text"] = text
+        save(df)
 
     return df
 
 
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--recheck-all",
+        action="store_true",
+        help="Recheck every website, even ones that already have a result (disables resume).",
+    )
+    return parser.parse_args()
+
+
 def main() -> None:
+    args = parse_args()
     df = load()
-    df = run(df)
+    df = run(df, recheck_all=args.recheck_all)
     save(df)
 
 
